@@ -201,6 +201,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ebpf"
+version = "0.1.0"
+dependencies = [
+ "aya-ebpf",
+ "aya-log-ebpf",
+ "common",
+ "which",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -407,29 +417,19 @@ dependencies = [
  "aya-build",
  "aya-log",
  "cargo_metadata",
+ "ebpf",
  "env_logger",
  "libc",
  "log",
- "quicd-ebpf-router-common",
- "quicd-ebpf-router-ebpf",
+ "common",
  "tokio",
 ]
 
 [[package]]
-name = "quicd-ebpf-router-common"
+name = "common"
 version = "0.1.0"
 dependencies = [
  "aya",
-]
-
-[[package]]
-name = "quicd-ebpf-router-ebpf"
-version = "0.1.0"
-dependencies = [
- "aya-ebpf",
- "aya-log-ebpf",
- "quicd-ebpf-router-common",
- "which",
 ]
 
 [[package]]

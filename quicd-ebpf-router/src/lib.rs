@@ -4,8 +4,7 @@ use quicd_ebpf_router_common::SockKey;
 use log::{debug, warn};
 use tokio::signal;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn setup() -> anyhow::Result<()> {
     env_logger::init();
 
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
