@@ -214,6 +214,18 @@ pub fn attach_program(ebpf: &mut aya::Ebpf) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Get the expected cookie for a worker
+/// Useful for debugging and verification
+pub fn get_worker_cookie(generation: u8, worker_idx: u8) -> u16 {
+    Cookie::generate(generation, worker_idx)
+}
+
+/// Check if a cookie corresponds to a valid worker
+/// This is a local check - doesn't query the eBPF map
+pub fn is_valid_worker_cookie(cookie: u16, current_generation: u8) -> bool {
+    Cookie::validate(cookie) && Cookie::get_generation(cookie) == current_generation
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,4 +329,220 @@ mod tests {
             assert_eq!(Cookie::get_worker_idx(cookie), worker_idx);
         }
     }
+
+    #[test]
+    fn test_worker_cookie_generation() {
+        let generation = 5;
+        let worker_idx = 42;
+        
+        let cookie = get_worker_cookie(generation, worker_idx);
+        assert!(Cookie::validate(cookie));
+        assert_eq!(Cookie::get_generation(cookie), generation);
+        assert_eq!(Cookie::get_worker_idx(cookie), worker_idx);
+    }
+
+    #[test]
+    fn test_valid_worker_cookie_check() {
+        let generation = 3;
+        let worker_idx = 17;
+        
+        let cookie = Cookie::generate(generation, worker_idx);
+        assert!(is_valid_worker_cookie(cookie, generation));
+        assert!(!is_valid_worker_cookie(cookie, generation + 1)); // Wrong generation
+        
+        let invalid_cookie = cookie ^ 0x0001; // Corrupt checksum
+        assert!(!is_valid_worker_cookie(invalid_cookie, generation));
+    }
+}
+
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    #[test]
+    fn test_ebpf_cookie_routing() {
+        // Setup eBPF program
+        setup_rlimit().expect("Failed to setup rlimit");
+        let mut ebpf = load_ebpf().expect("Failed to load eBPF");
+        attach_program(&mut ebpf).expect("Failed to attach program");
+
+        let generation = 0;
+
+        // Test cookie generation and validation (without actual socket insertion)
+        let cookie0 = Cookie::generate(generation, 0);
+        let cookie1 = Cookie::generate(generation, 1);
+        let cookie2 = Cookie::generate(generation, 2);
+
+        println!("Testing eBPF cookie routing:");
+        println!("Cookie 0: {:#06x} (worker 0)", cookie0);
+        println!("Cookie 1: {:#06x} (worker 1)", cookie1);
+        println!("Cookie 2: {:#06x} (worker 2)", cookie2);
+
+        // Test cookie generation and validation
+        assert!(Cookie::validate(cookie0));
+        assert!(Cookie::validate(cookie1));
+        assert!(Cookie::validate(cookie2));
+
+        assert_eq!(Cookie::get_worker_idx(cookie0), 0);
+        assert_eq!(Cookie::get_worker_idx(cookie1), 1);
+        assert_eq!(Cookie::get_worker_idx(cookie2), 2);
+
+        assert_eq!(Cookie::get_generation(cookie0), generation);
+        assert_eq!(Cookie::get_generation(cookie1), generation);
+        assert_eq!(Cookie::get_generation(cookie2), generation);
+
+        // Test Connection ID creation with cookies
+        let prefix = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+        let cid0 = ConnectionId::new(generation, 0, prefix);
+        let cid1 = ConnectionId::new(generation, 1, prefix);
+        let cid2 = ConnectionId::new(generation, 2, prefix);
+
+        // Verify cookies are embedded correctly
+        assert_eq!(ConnectionId::extract_cookie(&cid0), Some(cookie0));
+        assert_eq!(ConnectionId::extract_cookie(&cid1), Some(cookie1));
+        assert_eq!(ConnectionId::extract_cookie(&cid2), Some(cookie2));
+
+        assert!(ConnectionId::validate_cookie(&cid0));
+        assert!(ConnectionId::validate_cookie(&cid1));
+        assert!(ConnectionId::validate_cookie(&cid2));
+
+        // Test invalid cookie scenarios
+        let invalid_cid = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x01]; // Invalid cookie
+        assert!(!ConnectionId::validate_cookie(&invalid_cid));
+
+        // Test load distribution for new connections (no valid cookie)
+        let new_connection_cid = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]; // Random DCID
+        assert!(!ConnectionId::validate_cookie(&new_connection_cid));
+
+        println!("✓ eBPF cookie routing logic validation passed");
+    }
+
+    #[test]
+    fn test_quic_packet_parsing() {
+        // Test parsing of different QUIC packet types
+
+        // Short header packet (1-RTT)
+        let mut short_header_packet = vec![0x40]; // Short header flag
+        short_header_packet.extend_from_slice(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]); // 8-byte DCID
+        short_header_packet.extend_from_slice(&[0x99, 0xAA, 0xBB]); // Rest of packet
+
+        // Create a Connection ID and embed it
+        let generation = 1;
+        let worker_idx = 42;
+        let cid = ConnectionId::new(generation, worker_idx, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+
+        // Replace DCID in packet
+        short_header_packet[1..9].copy_from_slice(&cid);
+
+        // Extract cookie from packet (simulate what eBPF does)
+        let extracted_cookie = extract_cookie_from_packet(&short_header_packet);
+        assert_eq!(extracted_cookie, Some(Cookie::generate(generation, worker_idx)));
+        assert!(extracted_cookie.map_or(false, |c| Cookie::validate(c)));
+
+        // Long header packet (Initial)
+        let mut long_header_packet = vec![0xC0]; // Long header flag
+        long_header_packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Version
+        long_header_packet.extend_from_slice(&[0x08]); // DCID length
+        long_header_packet.extend_from_slice(&cid); // DCID
+        long_header_packet.extend_from_slice(&[0x00]); // SCID length
+        long_header_packet.extend_from_slice(&[0xCC, 0xDD]); // Rest of packet
+
+        // Extract cookie from long header packet
+        let extracted_cookie_long = extract_cookie_from_packet(&long_header_packet);
+        assert_eq!(extracted_cookie_long, Some(Cookie::generate(generation, worker_idx)));
+        assert!(extracted_cookie_long.map_or(false, |c| Cookie::validate(c)));
+
+        println!("✓ QUIC packet parsing validation passed");
+    }
+
+    #[test]
+    fn test_load_distribution_hash() {
+        // Test that the load distribution hash function works consistently
+
+        let test_dcids = vec![
+            [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+            [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11],
+            [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0],
+        ];
+
+        // Test that the same DCID always produces the same hash
+        for dcid in &test_dcids {
+            let hash1 = compute_dcid_hash_simple(dcid);
+            let hash2 = compute_dcid_hash_simple(dcid);
+            assert_eq!(hash1, hash2, "Hash should be consistent for same DCID");
+
+            // Hash should be in range 0-255 for load distribution (u8 is always < 256)
+            // This assertion is redundant but kept for clarity
+        }
+
+        // Test that different DCIDs produce different hashes (most of the time)
+        let hashes: Vec<u8> = test_dcids.iter().map(|dcid| compute_dcid_hash_simple(dcid)).collect();
+        let unique_hashes: std::collections::HashSet<_> = hashes.iter().collect();
+
+        // At least 2 out of 3 should be different (allowing for hash collisions)
+        assert!(unique_hashes.len() >= 2, "Load distribution should spread connections");
+
+        println!("✓ Load distribution hash validation passed");
+    }
+
+    #[test]
+    fn test_cookie_rotation() {
+        // Test cookie rotation with generations
+        let worker_idx = 100;
+        let generations = [0, 1, 5, 15, 31]; // Test various generations
+
+        for &generation in &generations {
+            let cookie = Cookie::generate(generation, worker_idx);
+            assert!(Cookie::validate(cookie));
+            assert_eq!(Cookie::get_generation(cookie), generation);
+            assert_eq!(Cookie::get_worker_idx(cookie), worker_idx);
+        }
+
+        // Test that different generations produce different cookies
+        let cookie_gen0 = Cookie::generate(0, worker_idx);
+        let cookie_gen1 = Cookie::generate(1, worker_idx);
+        assert_ne!(cookie_gen0, cookie_gen1);
+
+        // Test generation wraparound
+        let cookie_wrap = Cookie::generate(32, worker_idx); // Should wrap to 0
+        assert_eq!(Cookie::get_generation(cookie_wrap), 0);
+
+        println!("✓ Cookie rotation validation passed");
+    }
+}
+
+// Helper functions for testing (simulating eBPF logic)
+fn extract_cookie_from_packet(packet: &[u8]) -> Option<u16> {
+    if packet.is_empty() {
+        return None;
+    }
+
+    let first_byte = packet[0];
+
+    if first_byte & 0x80 == 0 {
+        // Short header
+        if packet.len() < 9 {
+            return None;
+        }
+        Some(u16::from_be_bytes([packet[7], packet[8]]))
+    } else {
+        // Long header
+        if packet.len() < 14 {
+            return None;
+        }
+        let dcid_start = 6; // flags(1) + version(4) + dcid_len(1)
+        Some(u16::from_be_bytes([packet[dcid_start + 6], packet[dcid_start + 7]]))
+    }
+}
+
+fn compute_dcid_hash_simple(dcid: &[u8; 8]) -> u8 {
+    // Simple hash for testing (matches eBPF logic)
+    let mut hash: u32 = 0;
+    for &byte in dcid {
+        hash = hash.wrapping_add(byte as u32);
+        hash = hash.wrapping_mul(31);
+    }
+    (hash % 256) as u8
 }

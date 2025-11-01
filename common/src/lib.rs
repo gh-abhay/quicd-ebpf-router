@@ -23,8 +23,8 @@ impl Cookie {
     /// 
     /// # Example
     /// ```
-    /// let cookie = Cookie::generate(0, 42);
-    /// assert!(Cookie::validate(cookie));
+    /// let cookie = common::Cookie::generate(0, 42);
+    /// assert!(common::Cookie::validate(cookie));
     /// ```
     #[inline]
     pub const fn generate(generation: u8, worker_idx: u8) -> u16 {
