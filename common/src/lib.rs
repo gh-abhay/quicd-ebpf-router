@@ -13,14 +13,14 @@ pub struct Cookie;
 
 impl Cookie {
     /// Generate a cookie from generation and worker index
-    /// 
+    ///
     /// # Arguments
     /// * `generation` - Generation counter (0-31, only lower 5 bits used)
     /// * `worker_idx` - Worker/socket index (0-255)
-    /// 
+    ///
     /// # Returns
     /// A 16-bit cookie value with embedded checksum
-    /// 
+    ///
     /// # Example
     /// ```
     /// let cookie = common::Cookie::generate(0, 42);
@@ -30,16 +30,16 @@ impl Cookie {
     pub const fn generate(generation: u8, worker_idx: u8) -> u16 {
         let g = (generation & 0x1F) as u16; // 5 bits
         let idx = worker_idx as u16; // 8 bits
-        let checksum = ((g + idx) & 0x7) as u16; // 3 bits
-        
+        let checksum = (g + idx) & 0x7; // 3 bits
+
         (g << 11) | (idx << 3) | checksum
     }
-    
+
     /// Validate a cookie's checksum
-    /// 
+    ///
     /// # Arguments
     /// * `cookie` - The 16-bit cookie value to validate
-    /// 
+    ///
     /// # Returns
     /// `true` if the checksum is valid, `false` otherwise
     #[inline]
@@ -48,16 +48,16 @@ impl Cookie {
         let idx = (cookie >> 3) & 0xff;
         let chksum = cookie & 0x7;
         let sum = generation + idx;
-        
+
         chksum == (sum & 0x7)
     }
-    
+
     /// Extract the generation from a cookie
     #[inline]
     pub const fn get_generation(cookie: u16) -> u8 {
         (cookie >> 11) as u8
     }
-    
+
     /// Extract the worker index from a cookie
     #[inline]
     pub const fn get_worker_idx(cookie: u16) -> u8 {

@@ -35,7 +35,7 @@ fn try_quicd_ebpf_router(ctx: SkMsgContext) -> Result<u32, u32> {
     let idx = (cookie >> 3) & 0xff;
     let chksum = cookie & 0x7;
     let sum = generation + idx;
-    
+
     if chksum != (sum & 0x7) {
         info!(&ctx, "invalid cookie checksum, passing through");
         return Ok(0); // SK_PASS

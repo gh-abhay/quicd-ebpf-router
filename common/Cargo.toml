@@ -2,7 +2,10 @@
 name = "common"
 version = "0.1.0"
 edition.workspace = true
-
+description = "Common utilities for QUIC eBPF routing including cookie generation and validation"
+repository = "https://github.com/quicd/quicd-ebpf-router"
+keywords = ["ebpf", "quic", "cookie", "routing", "networking"]
+categories = ["network-programming", "data-structures"]
 license.workspace = true
 
 [features]
