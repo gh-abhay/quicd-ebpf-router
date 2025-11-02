@@ -2,7 +2,10 @@
 name = "quicd-ebpf-router"
 version = "0.1.0"
 edition.workspace = true
-
+description = "A QUIC connection router using eBPF for high-performance packet routing"
+repository = "https://github.com/quicd/quicd-ebpf-router"
+keywords = ["ebpf", "quic", "networking", "router", "performance"]
+categories = ["network-programming", "api-bindings"]
 license.workspace = true
 
 [dependencies]
